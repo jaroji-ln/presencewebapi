@@ -5,6 +5,9 @@ const bcrypt = require('bcrypt');
 const mysql = require('mysql2');
 const path = require('path');
 const cors = require('cors');
+const multer = require('multer');
+const crypto = require('crypto');
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,7 +15,7 @@ const SECRET_KEY = process.env.SECRET_KEY;
 
 // CORS configuration
 const corsOptions = {
-  origin: 'https://presensi.spilme.id/', // Update this to your frontend domain
+  origin: 'http://localhost:3000/', // Update this to your frontend domain
   methods: 'GET,POST,PUT,DELETE',
   allowedHeaders: 'Content-Type,Authorization'
 };
@@ -47,6 +50,36 @@ db.connect(err => {
 // Middleware to parse JSON
 app.use(express.json());
 
+// Serve static files from the 'uploads' directory
+app.use('/uploads', express.static('uploads'));
+
+// Set up storage engine
+const storage = multer.diskStorage({
+  destination: './uploads/images/karyawan',
+  filename: (req, file, cb) => {
+    const randomName = crypto.randomBytes(16).toString('hex'); // Generate a random name
+    const extension = path.extname(file.originalname);
+    cb(null, `${Date.now()}-${randomName}${extension}`);
+  }
+});
+
+// Init upload
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 1000000 },
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png/;
+    const mimetype = filetypes.test(file.mimetype);
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb('Error: Images Only!');
+    }
+  }
+}).single('picture');
+
 //landing page
 app.get('/', function(req, res){
     res.sendFile(path.join(__dirname, 'public', 'landing.html'));
@@ -54,22 +87,36 @@ app.get('/', function(req, res){
 
 // Register route
 app.post('/register', async (req, res) => {
-  const { username, password, departemen, nik, nama } = req.body;
-  console.log(JSON.stringify(req.body));
-  // Hash the password
-  const hashedPassword = await bcrypt.hash(password, 10);
-
-  // Insert user into the database
-  const query = 'INSERT INTO karyawan (nik, nama,departemen, username, password) VALUES (?, ?, ?, ?, ?)';
-  db.query(query, [nik, nama, departemen, username, hashedPassword], (err, results) => {
-      console.log(err);
+  upload(req, res, async (err) => {
     if (err) {
-      if (err.code === 'ER_DUP_ENTRY') {
-        return res.status(400).json({ message: 'Username already exists' });
-      }
-      return res.status(500).json({ message: 'Database error', error: err });
+      return res.status(400).json({ message: err });
     }
-    res.status(201).json({ message: 'User registered successfully' });
+
+    const { username, password, departemen, nik, nama } = req.body;
+    const picture = req.file ? req.file.filename : null;
+
+    if (!username || !password || !departemen || !nik || !nama) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    try {
+      // Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Insert user into the database
+      const query = 'INSERT INTO karyawan (nik, nama, departemen, username, password, foto_profil) VALUES (?, ?, ?, ?, ?, ?)';
+      db.query(query, [nik, nama, departemen, username, hashedPassword, picture], (err, results) => {
+        if (err) {
+          if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(400).json({ message: 'Username already exists' });
+          }
+          return res.status(500).json({ message: 'Database error', error: err });
+        }
+        res.status(201).json({ message: 'User registered successfully' });
+      });
+    } catch (error) {
+      res.status(500).json({ message: 'Server error', error });
+    }
   });
 });
 
@@ -99,7 +146,7 @@ app.post('/login', async (req, res) => {
     // Generate JWT
     const tokens = jwt.sign({ username: user.username }, SECRET_KEY, { expiresIn: '3h' });
 
-    res.json({ token: tokens, nama: user.nama, departemen: user.departemen });
+    res.json({ token: tokens, nama: user.nama, departemen: user.departemen, imgUrl: 'http://localhost:3000/uploads/images/karyawan/'+user.foto_profil });
   });
 });
 
